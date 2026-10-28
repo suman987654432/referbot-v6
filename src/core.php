@@ -159,21 +159,25 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     }
 
     try {
+        // Safety: recover from any unexpected leftover transaction on this connection
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (Throwable $ignored) {}
+        }
         db_begin($pdo);
 
         $store = $tokenTaken ? hash('sha256', $token . ':' . $uid) : $token;   // exempt users: keep UNIQUE happy
         if (db_driver() === 'pgsql') {
-            try {
-                $pdo->prepare('DELETE FROM devices WHERE user_id = ?')->execute([$uid]);
-            } catch (Throwable $eDel) {
-                throw new Exception('Device delete error: ' . $eDel->getMessage());
-            }
-            try {
-                $pdo->prepare('INSERT INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
-                    ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
-            } catch (Throwable $eIns) {
-                throw new Exception('Device insert error: ' . $eIns->getMessage());
-            }
+            // Single atomic UPSERT — avoids the DELETE→INSERT gap that caused 25P02 errors
+            $pdo->prepare('
+                INSERT INTO devices(user_id, device_token, fp_hash, ip, ua, created_at)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT (user_id) DO UPDATE
+                  SET device_token = EXCLUDED.device_token,
+                      fp_hash      = EXCLUDED.fp_hash,
+                      ip           = EXCLUDED.ip,
+                      ua           = EXCLUDED.ua,
+                      created_at   = EXCLUDED.created_at
+            ')->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
         } else {
             $pdo->prepare('INSERT OR REPLACE INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
                 ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
