@@ -834,7 +834,7 @@ function admin_input(int $uid, array $u, array $m): bool {
         case 'givepts':
             if (!preg_match('/^[+-]?\d{1,7}$/', $text) || (int)$text === 0) { send($uid, 'Number bhejo, jaise 10 ya -5.'); return true; }
             $target = (int)$st['uid'];
-            $pdo->exec('BEGIN IMMEDIATE');
+            db_begin($pdo);
             $a = add_points($target, (int)$text, 'admin', (string)$uid);
             $pdo->exec('COMMIT');
             set_state($uid, null);
@@ -896,7 +896,7 @@ function handle_admin_cmd(int $uid, string $text): bool {
         case '/givepoints':
             $n = (int)($p[2] ?? 0);
             if (!$t || !$n || !get_user($t)) { send($uid, 'Use: /givepoints <uid> <n>'); return true; }
-            $pdo->exec('BEGIN IMMEDIATE');
+            db_begin($pdo);
             $a = add_points($t, $n, 'admin', (string)$uid);
             $pdo->exec('COMMIT');
             send($uid, "Done. Change: {$a}");

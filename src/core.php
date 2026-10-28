@@ -131,7 +131,7 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     $exempt = (bool)$u['device_exempt'];
     $credited = [];
     try {
-        $pdo->exec('BEGIN IMMEDIATE');
+        db_begin($pdo);
 
         $reject = function (string $code, string $msg) use ($pdo, $uid, $ip, $fp, $fail) {
             $pdo->exec('ROLLBACK');
@@ -228,7 +228,7 @@ function list_rewards(): array {
 function redeem(int $uid, int $rid): array {
     $pdo = db();
     try {
-        $pdo->exec('BEGIN IMMEDIATE');
+        db_begin($pdo);
         $st = $pdo->prepare('SELECT * FROM rewards WHERE id = ? AND active = 1');
         $st->execute([$rid]);
         $rw = $st->fetch();

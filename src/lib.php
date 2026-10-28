@@ -62,6 +62,14 @@ function db_driver(): string {
     return $driver;
 }
 
+function db_begin(PDO $pdo): void {
+    if (db_driver() === 'pgsql') {
+        $pdo->exec('BEGIN');
+    } else {
+        $pdo->exec('BEGIN IMMEDIATE');
+    }
+}
+
 function db(): PDO {
     static $pdo = null;
     if ($pdo) return $pdo;
