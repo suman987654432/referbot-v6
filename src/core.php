@@ -134,7 +134,7 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
         db_begin($pdo);
 
         $reject = function (string $code, string $msg) use ($pdo, $uid, $ip, $fp, $fail) {
-            $pdo->exec('ROLLBACK');
+            try { if ($pdo->inTransaction()) { $pdo->rollBack(); } else { $pdo->exec('ROLLBACK'); } } catch (Throwable $e) {}
             log_verify($uid, $ip, $fp, $code);
             return $fail($code, $msg);
         };
@@ -177,7 +177,7 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     } catch (Throwable $e) {
         try { if ($pdo->inTransaction()) { $pdo->rollBack(); } else { $pdo->exec('ROLLBACK'); } } catch (Throwable $e2) {}
         log_line('verify_device error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
-        return $fail('server', 'Server error: ' . $e->getMessage());
+        return $fail('server', 'Server error: ' . $e->getMessage() . ' (' . basename($e->getFile()) . ':' . $e->getLine() . ')');
     }
 
     log_verify($uid, $ip, $fp, 'ok');
