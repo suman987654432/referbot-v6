@@ -180,9 +180,9 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
         }
         $pdo->prepare('UPDATE users SET verified_at = ? WHERE user_id = ?')->execute([time(), $uid]);
         $credited = credit_all_ready_for($uid);
-        $pdo->exec('COMMIT');
+        $pdo->commit();
     } catch (Throwable $e) {
-        try { if ($pdo->inTransaction()) { $pdo->rollBack(); } else { $pdo->exec('ROLLBACK'); } } catch (Throwable $e2) {}
+        try { if ($pdo->inTransaction()) $pdo->rollBack(); } catch (Throwable $e2) {}
         log_line('verify_device error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
         return $fail('server', 'Server error: ' . $e->getMessage() . ' (' . basename($e->getFile()) . ':' . $e->getLine() . ')');
     }
@@ -247,7 +247,7 @@ function redeem(int $uid, int $rid): array {
 
         if (($rw['kind'] ?? 'stock') === 'manual') {          // service delivered by admin, no stock needed
             add_points($uid, -(int)$rw['cost'], 'redeem', 'reward:' . $rid . ':manual');
-            $pdo->exec('COMMIT');
+            $pdo->commit();
             return ['ok' => true, 'manual' => true, 'reward' => $rw['name'], 'left' => (int)$u['points'] - (int)$rw['cost']];
         }
         $st = $pdo->prepare('SELECT id, code FROM reward_stock WHERE reward_id = ? AND used = 0 ORDER BY id LIMIT 1');
@@ -259,7 +259,7 @@ function redeem(int $uid, int $rid): array {
         $up->execute([$uid, time(), $s['id']]);
         if ($up->rowCount() !== 1) { if ($pdo->inTransaction()) $pdo->rollBack(); return ['ok' => false, 'msg' => 'Dobara try karo.']; }
         add_points($uid, -(int)$rw['cost'], 'redeem', 'reward:' . $rid . ':stock:' . $s['id']);
-        $pdo->exec('COMMIT');
+        $pdo->commit();
         return ['ok' => true, 'code' => $s['code'], 'reward' => $rw['name'],
                 'left' => (int)$u['points'] - (int)$rw['cost']];
     } catch (Throwable $e) {

@@ -64,9 +64,9 @@ function db_driver(): string {
 
 function db_begin(PDO $pdo): void {
     if (db_driver() === 'pgsql') {
-        $pdo->exec('BEGIN');
+        if (!$pdo->inTransaction()) $pdo->beginTransaction();
     } else {
-        $pdo->exec('BEGIN IMMEDIATE');
+        if (!$pdo->inTransaction()) $pdo->exec('BEGIN IMMEDIATE');
     }
 }
 
