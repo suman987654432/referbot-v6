@@ -165,7 +165,10 @@ function gate(int $uid, array $u): bool {
         return false;
     }
     if (!$u['verified_at']) {
-        send($uid, E('verify') . " <b>Device verification baaki hai.</b>\nEk device par sirf ek account allowed hai. Niche button dabao (2 second lagte hain).", verify_kb());
+        $res = send($uid, E('verify') . " <b>Device verification baaki hai.</b>\nEk device par sirf ek account allowed hai. Niche button dabao (2 second lagte hain).", verify_kb());
+        if (!empty($res['result']['message_id'])) {
+            set_setting("verify_msg_{$uid}", (string)$res['result']['message_id']);
+        }
         return false;
     }
     return true;

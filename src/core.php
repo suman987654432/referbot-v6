@@ -192,6 +192,12 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     }
 
     log_verify($uid, $ip, $fp, 'ok');
+    $oldMsgId = (int)setting("verify_msg_{$uid}", 0);
+    if ($oldMsgId > 0) {
+        delete_msg($uid, $oldMsgId);
+        del_setting("verify_msg_{$uid}");
+    }
+    send($uid, "✅ <b>Device verify ho gaya!</b>\nAapka device safaltapoorvak verify ho chuka hai. Ab aap bot ke saare features use kar sakte hain.", main_kb($uid));
     foreach ($credited as [$referrer, $referred]) {
         $r = get_user($referrer);
         send($referrer, E('party') . " <b>Naya refer verify ho gaya!</b>\n+" . pts_per_ref()

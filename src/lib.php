@@ -617,6 +617,10 @@ function answer_cb(string $id, string $text = '', bool $alert = false): void {
     tg('answerCallbackQuery', ['callback_query_id' => $id, 'text' => $text, 'show_alert' => $alert ? 'true' : 'false']);
 }
 
+function delete_msg(int $chat_id, int $message_id): array {
+    return tg('deleteMessage', ['chat_id' => $chat_id, 'message_id' => $message_id]);
+}
+
 /* ------------------------------------------------- Mini App security */
 
 /** Validates Telegram Mini App initData (HMAC). Returns the user array or null. */
