@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>Device Verification</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{--bg:var(--tg-theme-bg-color,#fff);--fg:var(--tg-theme-text-color,#111);--hint:var(--tg-theme-hint-color,#777);--btn:var(--tg-theme-button-color,#2481cc);--btnfg:var(--tg-theme-button-text-color,#fff)}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+  .card{max-width:380px;width:100%;text-align:center}
+  .icon{font-size:56px;margin-bottom:8px}
+  h1{font-size:20px;margin:0 0 8px}
+  p{margin:0 0 14px;color:var(--hint);font-size:14px}
+  button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--btn);color:var(--btnfg);font-size:16px;font-weight:600}
+  button:disabled{opacity:.6}
+  #msg{margin-top:16px;font-size:15px;min-height:24px}
+  .ok{color:#1a9e47}.err{color:#d93025}
+  small{display:block;margin-top:18px;color:var(--hint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon" id="icon">🛡</div>
+  <h1>Device Verification</h1>
+  <p>Ek device par sirf ek account allowed hai. Verify dabao.</p>
+  <button id="go">Verify Karo</button>
+  <div id="msg"></div>
+  <small>Verify karne par aapke device ke browser/hardware ki general info (screen, GPU model, timezone) ek anonymous hash ke roop mein save hoti hai — sirf duplicate accounts rokne ke liye. Koi personal file ya contact access nahi hota.</small>
+</div>
+<script>
+const tg = window.Telegram && Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const $ = id => document.getElementById(id);
+
+function getToken() {
+  let t = null;
+  try { t = localStorage.getItem('rb_dt'); } catch (e) {}
+  if (!t) { const m = document.cookie.match(/(?:^|; )rb_dt=([a-f0-9-]{16,64})/); if (m) t = m[1]; }
+  if (!t) {
+    t = (crypto.randomUUID ? crypto.randomUUID() :
+         Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''));
+  }
+  try { localStorage.setItem('rb_dt', t); } catch (e) {}
+  document.cookie = 'rb_dt=' + t + ';max-age=31536000;path=/;SameSite=None;Secure';
+  return t;
+}
+
+async function sha256(s) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join('');
+}
+
+function canvasSig() {
+  try {
+    const c = document.createElement('canvas'); c.width = 240; c.height = 60;
+    const x = c.getContext('2d');
+    x.textBaseline = 'top'; x.font = "16px 'Arial'";
+    x.fillStyle = '#f60'; x.fillRect(10, 5, 100, 30);
+    x.fillStyle = '#069'; x.fillText('RB-device-check ✓ ₹', 4, 12);
+    x.fillStyle = 'rgba(102,204,0,0.6)'; x.fillText('RB-device-check ✓ ₹', 6, 14);
+    return c.toDataURL();
+  } catch (e) { return 'na'; }
+}
+
+function glSig() {
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (!gl) return 'nogl';
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) + '|' + gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
+               : gl.getParameter(gl.VENDOR) + '|' + gl.getParameter(gl.RENDERER);
+  } catch (e) { return 'glerr'; }
+}
+
+async function fingerprint() {
+  const s = screen;
+  const dims = [Math.min(s.width, s.height), Math.max(s.width, s.height)];   // stable across rotation
+  const parts = [
+    await sha256(canvasSig()), glSig(), dims.join('x'), s.colorDepth, window.devicePixelRatio,
+    navigator.hardwareConcurrency || 0, navigator.deviceMemory || 0, navigator.platform || '',
+    navigator.maxTouchPoints || 0, Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+    (navigator.languages || [navigator.language]).join(',')
+  ];
+  return sha256(parts.join('||'));
+}
+
+$('go').onclick = async () => {
+  const btn = $('go'), msg = $('msg');
+  btn.disabled = true; msg.className = ''; msg.textContent = 'Check ho raha hai...';
+  try {
+    const body = {
+      initData: tg ? tg.initData : '',
+      deviceToken: getToken(),
+      fp: await fingerprint(),
+      signals: { webdriver: !!navigator.webdriver }
+    };
+    const r = await fetch('api_verify.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    msg.textContent = j.msg || (j.ok ? 'Done' : 'Error');
+    msg.className = j.ok ? 'ok' : 'err';
+    if (j.ok) {
+      $('icon').textContent = '✅'; btn.style.display = 'none';
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+      setTimeout(() => tg && tg.close(), 1800);
+    } else { btn.disabled = false; }
+  } catch (e) {
+    msg.textContent = 'Network error. Dobara try karo.'; msg.className = 'err'; btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
