@@ -4,12 +4,18 @@ require __DIR__ . '/../src/core.php';
 require __DIR__ . '/../src/handlers.php';
 
 $secret = (string)cfg('webhook_secret', '');
-if ($secret === '' || !hash_equals($secret, (string)($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? ''))) {
+$headerSecret = (string)($_SERVER['HTTP_X_TELEGRAM_BOT_API_SECRET_TOKEN'] ?? '');
+
+if ($secret !== '' && !hash_equals($secret, $headerSecret)) {
+    log_line("WEBHOOK_403: Secret mismatch. Expected: " . substr($secret, 0, 5) . "... Got: " . substr($headerSecret, 0, 5) . "...");
     http_response_code(403);
     exit;
 }
+
 // answer Telegram fast, then work
 $raw = file_get_contents('php://input');
+log_line("WEBHOOK_RECV: " . substr((string)$raw, 0, 100));
+
 http_response_code(200);
 header('Content-Length: 0');
 header('Connection: close');
