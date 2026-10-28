@@ -27,7 +27,11 @@ if (is_array($upd)) {
         // Telegram re-sends an update if we are slow: process each update_id only once
         $uidv = (int)($upd['update_id'] ?? 0);
         if ($uidv) {
-            $st = db()->prepare('INSERT OR IGNORE INTO seen_updates(update_id, created_at) VALUES(?,?)');
+            if (db_driver() === 'pgsql') {
+                $st = db()->prepare('INSERT INTO seen_updates(update_id, created_at) VALUES(?,?) ON CONFLICT (update_id) DO NOTHING');
+            } else {
+                $st = db()->prepare('INSERT OR IGNORE INTO seen_updates(update_id, created_at) VALUES(?,?)');
+            }
             $st->execute([$uidv, time()]);
             if ($st->rowCount() === 0) exit;
             if ($uidv % 100 === 0) db()->exec('DELETE FROM seen_updates WHERE created_at < ' . (time() - 86400));
