@@ -175,9 +175,9 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
         $credited = credit_all_ready_for($uid);
         $pdo->exec('COMMIT');
     } catch (Throwable $e) {
-        try { $pdo->exec('ROLLBACK'); } catch (Throwable $e2) {}
-        log_line('verify_device error: ' . $e->getMessage());
-        return $fail('server', 'Server error, thodi der baad try karo.');
+        try { if ($pdo->inTransaction()) { $pdo->rollBack(); } else { $pdo->exec('ROLLBACK'); } } catch (Throwable $e2) {}
+        log_line('verify_device error: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+        return $fail('server', 'Server error: ' . $e->getMessage());
     }
 
     log_verify($uid, $ip, $fp, 'ok');

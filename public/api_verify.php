@@ -18,6 +18,8 @@ if (!is_array($j)) out(['ok' => false, 'msg' => 'bad json'], 400);
 $user = validate_init_data((string)($j['initData'] ?? ''));
 if (!$user) out(['ok' => false, 'code' => 'bad_init', 'msg' => 'Telegram se dobara kholo (session expire / invalid).'], 401);
 
+touch_user((int)$user['id'], (string)($user['first_name'] ?? ''), (string)($user['username'] ?? ''));
+
 $res = verify_device(
     (int)$user['id'],
     strtolower((string)($j['deviceToken'] ?? '')),
