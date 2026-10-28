@@ -111,7 +111,11 @@ function split_stock_items(string $raw): array {
 }
 
 function add_stock(int $rid, array $items): int {
-    $ins = db()->prepare('INSERT OR IGNORE INTO reward_stock(reward_id, code) VALUES(?,?)');
+    if (db_driver() === 'pgsql') {
+        $ins = db()->prepare('INSERT INTO reward_stock(reward_id, code) VALUES(?,?) ON CONFLICT (reward_id, code) DO NOTHING');
+    } else {
+        $ins = db()->prepare('INSERT OR IGNORE INTO reward_stock(reward_id, code) VALUES(?,?)');
+    }
     $n = 0;
     foreach ($items as $it) { $ins->execute([$rid, $it]); $n += $ins->rowCount(); }
     return $n;
@@ -368,7 +372,11 @@ function add_channel(string $in): array {
     if ($link === '') return [false, "❌ Invite link nahi ban paya. Bot ko 'Invite users via link' permission do ya public channel use karo."];
     $store = $username ? '@' . $username : (string)$chat['id'];
     $title = (string)($chat['title'] ?? $store);
-    $ins = db()->prepare('INSERT OR IGNORE INTO channels(chat, title, link) VALUES(?,?,?)');
+    if (db_driver() === 'pgsql') {
+        $ins = db()->prepare('INSERT INTO channels(chat, title, link) VALUES(?,?,?) ON CONFLICT (chat) DO NOTHING');
+    } else {
+        $ins = db()->prepare('INSERT OR IGNORE INTO channels(chat, title, link) VALUES(?,?,?)');
+    }
     $ins->execute([$store, $title, $link]);
     if ($ins->rowCount() !== 1) return [false, 'Ye channel pehle se add hai.'];
     db()->exec('UPDATE users SET chan_ok_until = 0');

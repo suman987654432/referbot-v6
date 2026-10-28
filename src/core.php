@@ -17,7 +17,11 @@ function get_user(int $uid): ?array {
 /** Creates the user row if missing. Returns true only for a brand-new user (atomic). */
 function touch_user(int $uid, string $first, string $username): bool {
     $pdo = db();
-    $st = $pdo->prepare('INSERT OR IGNORE INTO users(user_id, username, first_name, created_at) VALUES(?,?,?,?)');
+    if (db_driver() === 'pgsql') {
+        $st = $pdo->prepare('INSERT INTO users(user_id, username, first_name, created_at) VALUES(?,?,?,?) ON CONFLICT (user_id) DO NOTHING');
+    } else {
+        $st = $pdo->prepare('INSERT OR IGNORE INTO users(user_id, username, first_name, created_at) VALUES(?,?,?,?)');
+    }
     $st->execute([$uid, $username, $first, time()]);
     $new = $st->rowCount() === 1;
     if (!$new) {
@@ -31,7 +35,11 @@ function attach_referrer(int $uid, int $ref): bool {
     if ($ref <= 0 || $ref === $uid) return false;
     $r = get_user($ref);
     if (!$r || $r['banned']) return false;
-    $st = db()->prepare('INSERT OR IGNORE INTO referrals(referred_id, referrer_id, created_at) VALUES(?,?,?)');
+    if (db_driver() === 'pgsql') {
+        $st = db()->prepare('INSERT INTO referrals(referred_id, referrer_id, created_at) VALUES(?,?,?) ON CONFLICT (referred_id) DO NOTHING');
+    } else {
+        $st = db()->prepare('INSERT OR IGNORE INTO referrals(referred_id, referrer_id, created_at) VALUES(?,?,?)');
+    }
     $st->execute([$uid, $ref, time()]);
     return $st->rowCount() === 1;
 }
@@ -156,8 +164,13 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
         }
 
         $store = $tokenTaken ? hash('sha256', $token . ':' . $uid) : $token;   // exempt users: keep UNIQUE happy
-        $pdo->prepare('INSERT OR REPLACE INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
-            ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
+        if (db_driver() === 'pgsql') {
+            $pdo->prepare('INSERT INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT (user_id) DO UPDATE SET device_token = EXCLUDED.device_token, fp_hash = EXCLUDED.fp_hash, ip = EXCLUDED.ip, ua = EXCLUDED.ua, created_at = EXCLUDED.created_at')
+                ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
+        } else {
+            $pdo->prepare('INSERT OR REPLACE INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
+                ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
+        }
         $pdo->prepare('UPDATE users SET verified_at = ? WHERE user_id = ?')->execute([time(), $uid]);
         $credited = credit_all_ready_for($uid);
         $pdo->exec('COMMIT');

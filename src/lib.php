@@ -50,19 +50,144 @@ function log_line(string $msg): void {
 
 /* ---------------------------------------------------------------- DB */
 
+function db_driver(): string {
+    static $driver = null;
+    if ($driver !== null) return $driver;
+    $dbUrl = getenv('DATABASE_URL');
+    if ($dbUrl && (str_starts_with($dbUrl, 'postgres://') || str_starts_with($dbUrl, 'postgresql://'))) {
+        $driver = 'pgsql';
+    } else {
+        $driver = 'sqlite';
+    }
+    return $driver;
+}
+
 function db(): PDO {
     static $pdo = null;
     if ($pdo) return $pdo;
-    $pdo = new PDO('sqlite:' . cfg('db_path', '/var/lib/referbot/referbot.db'));
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('PRAGMA journal_mode=WAL');
-    $pdo->exec('PRAGMA busy_timeout=10000');
-    $pdo->exec('PRAGMA foreign_keys=ON');
-    if ((int)$pdo->query('PRAGMA user_version')->fetchColumn() < SCHEMA_VERSION) {
-        init_schema($pdo);
+
+    $driver = db_driver();
+    if ($driver === 'pgsql') {
+        $dbUrl = getenv('DATABASE_URL');
+        $parts = parse_url($dbUrl);
+        $host = $parts['host'] ?? 'localhost';
+        $port = $parts['port'] ?? 5432;
+        $user = $parts['user'] ?? '';
+        $pass = $parts['pass'] ?? '';
+        $dbname = ltrim($parts['path'] ?? '', '/');
+        $dsn = "pgsql:host={$host};port={$port};dbname={$dbname};sslmode=require";
+        $pdo = new PDO($dsn, $user, $pass);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        init_schema_pgsql($pdo);
+    } else {
+        $pdo = new PDO('sqlite:' . cfg('db_path', '/var/lib/referbot/referbot.db'));
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->exec('PRAGMA journal_mode=WAL');
+        $pdo->exec('PRAGMA busy_timeout=10000');
+        $pdo->exec('PRAGMA foreign_keys=ON');
+        if ((int)$pdo->query('PRAGMA user_version')->fetchColumn() < SCHEMA_VERSION) {
+            init_schema($pdo);
+        }
     }
     return $pdo;
+}
+
+function init_schema_pgsql(PDO $pdo): void {
+    $pdo->exec("
+    CREATE TABLE IF NOT EXISTS users(
+      user_id       BIGINT PRIMARY KEY,
+      username      TEXT NOT NULL DEFAULT '',
+      first_name    TEXT NOT NULL DEFAULT '',
+      created_at    BIGINT NOT NULL,
+      verified_at   BIGINT,
+      points        BIGINT NOT NULL DEFAULT 0 CHECK(points >= 0),
+      total_earned  BIGINT NOT NULL DEFAULT 0,
+      banned        INT NOT NULL DEFAULT 0,
+      device_exempt INT NOT NULL DEFAULT 0,
+      chan_ok_until BIGINT NOT NULL DEFAULT 0,
+      state         TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS referrals(
+      referred_id BIGINT PRIMARY KEY,
+      referrer_id BIGINT NOT NULL,
+      created_at  BIGINT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'pending',
+      credited_at BIGINT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_id, status);
+    CREATE TABLE IF NOT EXISTS devices(
+      user_id      BIGINT PRIMARY KEY,
+      device_token TEXT NOT NULL UNIQUE,
+      fp_hash      TEXT NOT NULL,
+      ip           TEXT NOT NULL,
+      ua           TEXT NOT NULL DEFAULT '',
+      created_at   BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_dev_fp ON devices(fp_hash);
+    CREATE INDEX IF NOT EXISTS idx_dev_ip ON devices(ip, created_at);
+    CREATE TABLE IF NOT EXISTS ledger(
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT NOT NULL,
+      delta      BIGINT NOT NULL,
+      reason     TEXT NOT NULL,
+      ref        TEXT NOT NULL DEFAULT '',
+      created_at BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
+    CREATE TABLE IF NOT EXISTS rewards(
+      id     BIGSERIAL PRIMARY KEY,
+      name   TEXT NOT NULL,
+      cost   BIGINT NOT NULL CHECK(cost > 0),
+      active INT NOT NULL DEFAULT 1,
+      kind   TEXT NOT NULL DEFAULT 'stock'
+    );
+    CREATE TABLE IF NOT EXISTS reward_stock(
+      id         BIGSERIAL PRIMARY KEY,
+      reward_id  BIGINT NOT NULL,
+      code       TEXT NOT NULL,
+      used       INT NOT NULL DEFAULT 0,
+      claimed_by BIGINT,
+      claimed_at BIGINT,
+      UNIQUE(reward_id, code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stock_avail ON reward_stock(reward_id, used, id);
+    CREATE TABLE IF NOT EXISTS verify_log(
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT,
+      ip         TEXT,
+      fp_hash    TEXT,
+      result     TEXT,
+      created_at BIGINT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS settings(
+      k TEXT PRIMARY KEY,
+      v TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS channels(
+      id    BIGSERIAL PRIMARY KEY,
+      chat  TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL DEFAULT '',
+      link  TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS seen_updates(
+      update_id  BIGINT PRIMARY KEY,
+      created_at BIGINT NOT NULL
+    );
+    ");
+
+    // seed channels from config if empty
+    $count = (int)$pdo->query('SELECT COUNT(*) FROM channels')->fetchColumn();
+    if ($count === 0) {
+        $links = array_values((array)cfg('channel_links', []));
+        $ins = $pdo->prepare('INSERT INTO channels(chat, title, link) VALUES(?,?,?) ON CONFLICT (chat) DO NOTHING');
+        foreach (array_values((array)cfg('channels', [])) as $i => $ch) {
+            $ch = (string)$ch;
+            $link = $links[$i] ?? (strpos($ch, '@') === 0 ? 'https://t.me/' . substr($ch, 1) : '');
+            $ins->execute([$ch, $ch, $link]);
+        }
+    }
 }
 
 function init_schema(PDO $pdo): void {
@@ -176,7 +301,11 @@ function setting(string $k, $default = null) {
 }
 
 function set_setting(string $k, string $v): void {
-    db()->prepare('INSERT OR REPLACE INTO settings(k, v) VALUES(?,?)')->execute([$k, $v]);
+    if (db_driver() === 'pgsql') {
+        db()->prepare('INSERT INTO settings(k, v) VALUES(?,?) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v')->execute([$k, $v]);
+    } else {
+        db()->prepare('INSERT OR REPLACE INTO settings(k, v) VALUES(?,?)')->execute([$k, $v]);
+    }
 }
 
 function del_setting(string $k): void {

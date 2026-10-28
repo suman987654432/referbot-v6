@@ -1,10 +1,11 @@
 FROM php:8.2-apache
 
-# Install SQLite dependencies and extensions
+# Install SQLite and PostgreSQL dependencies and extensions
 RUN apt-get update && apt-get install -y \
     sqlite3 \
     libsqlite3-dev \
-    && docker-php-ext-install pdo pdo_sqlite \
+    libpq-dev \
+    && docker-php-ext-install pdo pdo_sqlite pdo_pgsql \
     && rm -rf /var/lib/apt/lists/*
 
 # Enable Apache rewrite module

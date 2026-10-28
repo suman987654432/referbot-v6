@@ -8,7 +8,7 @@ $cmd = $argv[1] ?? '';
 switch ($cmd) {
     case 'init':
         db();
-        echo "DB ready: " . cfg('db_path') . "\n";
+        echo "DB ready (" . db_driver() . "): " . (db_driver() === 'pgsql' ? 'PostgreSQL (Neon)' : cfg('db_path')) . "\n";
         break;
     case 'webhook':
         $r = tg('setWebhook', [
