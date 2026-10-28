@@ -4,7 +4,7 @@
  * Nothing in here prints output; safe to include from CLI, webhook and API.
  */
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function cfg(string $key, $default = null) {
     static $c = null;
@@ -159,12 +159,14 @@ function init_schema_pgsql(PDO $pdo): void {
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at)");
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS rewards(
-      id     BIGSERIAL PRIMARY KEY,
-      name   TEXT NOT NULL,
-      cost   BIGINT NOT NULL CHECK(cost > 0),
-      active INT NOT NULL DEFAULT 1,
-      kind   TEXT NOT NULL DEFAULT 'stock'
+      id          BIGSERIAL PRIMARY KEY,
+      name        TEXT NOT NULL,
+      cost        BIGINT NOT NULL CHECK(cost > 0),
+      active      INT NOT NULL DEFAULT 1,
+      kind        TEXT NOT NULL DEFAULT 'stock',
+      custom_icon TEXT NOT NULL DEFAULT ''
     )");
+    try { $pdo->exec("ALTER TABLE rewards ADD COLUMN IF NOT EXISTS custom_icon TEXT NOT NULL DEFAULT ''"); } catch (Throwable $e) {}
 
     $pdo->exec("CREATE TABLE IF NOT EXISTS reward_stock(
       id         BIGSERIAL PRIMARY KEY,
@@ -261,11 +263,12 @@ function init_schema(PDO $pdo): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
     CREATE TABLE IF NOT EXISTS rewards(
-      id     INTEGER PRIMARY KEY AUTOINCREMENT,
-      name   TEXT NOT NULL,
-      cost   INTEGER NOT NULL CHECK(cost > 0),
-      active INTEGER NOT NULL DEFAULT 1,
-      kind   TEXT NOT NULL DEFAULT 'stock'
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT NOT NULL,
+      cost        INTEGER NOT NULL CHECK(cost > 0),
+      active      INTEGER NOT NULL DEFAULT 1,
+      kind        TEXT NOT NULL DEFAULT 'stock',
+      custom_icon TEXT NOT NULL DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS reward_stock(
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -304,6 +307,9 @@ function init_schema(PDO $pdo): void {
     $cols = array_column($pdo->query('PRAGMA table_info(rewards)')->fetchAll(), 'name');
     if (!in_array('kind', $cols, true)) {
         $pdo->exec("ALTER TABLE rewards ADD COLUMN kind TEXT NOT NULL DEFAULT 'stock'");
+    }
+    if (!in_array('custom_icon', $cols, true)) {
+        $pdo->exec("ALTER TABLE rewards ADD COLUMN custom_icon TEXT NOT NULL DEFAULT ''");
     }
     // seed channels from config.php once (later they are managed from the Admin Panel)
     if (!(int)$pdo->query('SELECT COUNT(*) FROM channels')->fetchColumn()) {

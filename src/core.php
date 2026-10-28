@@ -237,7 +237,7 @@ function channels_ok(int $uid): bool {
 
 function list_rewards(): array {
     return db()->query("
-        SELECT r.id, r.name, r.cost, r.kind,
+        SELECT r.id, r.name, r.cost, r.kind, r.custom_icon,
                (SELECT COUNT(*) FROM reward_stock s WHERE s.reward_id = r.id AND s.used = 0) AS stock
         FROM rewards r WHERE r.active = 1 ORDER BY r.cost, r.id")->fetchAll();
 }

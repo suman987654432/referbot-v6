@@ -242,7 +242,11 @@ function send_rewards(int $uid): void {
     foreach ($rw as $r) {
         $stock = $r['kind'] === 'manual' ? 'available' : 'stock: ' . $r['stock'];
         $txt .= "• <b>" . h($r['name']) . "</b> — {$r['cost']} pts ({$stock})\n";
-        $rows[] = [cbtn($r['name'] . ' • ' . $r['cost'] . ' pts', 'rd:' . $r['id'])];
+        $btnData = ['text' => $r['name'] . ' • ' . $r['cost'] . ' pts', 'callback_data' => 'rd:' . $r['id']];
+        if (!empty($r['custom_icon'])) {
+            $btnData['icon_custom_emoji_id'] = (string)$r['custom_icon'];
+        }
+        $rows[] = [$btnData];
     }
     send($uid, $txt, ['inline_keyboard' => $rows]);
 }
@@ -394,7 +398,11 @@ function p_rewards(): array {
     if (!$rows) $t .= "<i>Abhi koi reward nahi hai.</i>\n";
     foreach ($rows as $r) {
         $tag = $r['kind'] === 'manual' ? 'manual' : 'stock ' . $r['stock'];
-        $kb[] = [cbtn(($r['active'] ? '🟢 ' : '🔴 ') . $r['name'] . ' • ' . $r['cost'] . ' pts • ' . $tag, 'a:rwv:' . $r['id'])];
+        $btn = cbtn(($r['active'] ? '🟢 ' : '🔴 ') . $r['name'] . ' • ' . $r['cost'] . ' pts • ' . $tag, 'a:rwv:' . $r['id']);
+        if (!empty($r['custom_icon'])) {
+            $btn['icon_custom_emoji_id'] = (string)$r['custom_icon'];
+        }
+        $kb[] = [$btn];
     }
     $kb[] = [cbtn('➕ Naya Reward', 'a:rwadd')];
     $kb[] = back_row();
@@ -411,9 +419,11 @@ function p_reward(int $rid): array {
        . E('points') . " Cost: <b>{$r['cost']} pts</b>\n"
        . "Type: <b>" . ($r['kind'] === 'manual' ? 'Manual (admin deliver karega)' : 'Auto code (stock se)') . "</b>\n"
        . ($r['kind'] === 'manual' ? '' : "Stock bacha: <b>{$r['stock']}</b>  •  Bik chuka: <b>{$r['sold']}</b>\n")
+       . "Icon: <b>" . (!empty($r['custom_icon']) ? 'Custom Emoji (' . $r['custom_icon'] . ')' : 'Normal') . "</b>\n"
        . "Status: <b>" . ($r['active'] ? '🟢 Chalu' : '🔴 Band') . "</b>";
     $kb = [
         [cbtn('✏️ Naam', 'a:rwn:' . $rid), cbtn('💎 Cost', 'a:rwc:' . $rid)],
+        [cbtn('🎨 Custom Icon', 'a:rwi:' . $rid)],
     ];
     $row2 = [];
     if ($r['kind'] !== 'manual') $row2[] = cbtn('📦 Stock Add', 'a:rws:' . $rid);
@@ -574,11 +584,16 @@ function admin_cb(array $cb, array $u): void {
             set_state($uid, ['s' => 'rw_name']);
             send($uid, "🎁 Naye reward / service ka <b>naam</b> bhejo (jaise: Netflix 1 Month).\n/cancel = ruko");
             break;
+        case 'rwi':
+            set_state($uid, ['s' => 'rw_editicon', 'rid' => (int)$arg]);
+            send($uid, "🎨 Is reward ka <b>custom/premium emoji</b> bhejo (ya emoji ki ID number bhejo).\nNormal hatana ho to <code>0</code> bhejo.\n/cancel = ruko");
+            break;
         case 'rwk':
             $st = get_state($u);
             if (($st['s'] ?? '') !== 'rw_kind') { $toast = 'Session expire, dobara shuru karo.'; $alert = true; break; }
             $kind = $arg === 'manual' ? 'manual' : 'stock';
-            $pdo->prepare('INSERT INTO rewards(name, cost, kind) VALUES(?,?,?)')->execute([$st['name'], (int)$st['cost'], $kind]);
+            $icon = (string)($st['icon'] ?? '');
+            $pdo->prepare('INSERT INTO rewards(name, cost, kind, custom_icon) VALUES(?,?,?,?)')->execute([$st['name'], (int)$st['cost'], $kind, $icon]);
             $rid = (int)$pdo->lastInsertId();
             if ($kind === 'stock') {
                 set_state($uid, ['s' => 'rw_stock', 'rid' => $rid]);
@@ -753,13 +768,15 @@ function admin_input(int $uid, array $u, array $m): bool {
 
         case 'rw_name':
             if ($text === '') { send($uid, 'Naam text mein bhejo.'); return true; }
-            set_state($uid, ['s' => 'rw_cost', 'name' => mb_substr($text, 0, 60)]);
+            $ids = custom_emoji_ids($m);
+            $icon = $ids ? $ids[0] : '';
+            set_state($uid, ['s' => 'rw_cost', 'name' => mb_substr($text, 0, 60), 'icon' => $icon]);
             send($uid, E('points') . " Is reward ka <b>cost</b> kitne points? (number)");
             return true;
 
         case 'rw_cost':
             if (!ctype_digit($text) || (int)$text < 1) { send($uid, 'Sirf number bhejo (1 ya zyada).'); return true; }
-            set_state($uid, ['s' => 'rw_kind', 'name' => $st['name'], 'cost' => (int)$text]);
+            set_state($uid, ['s' => 'rw_kind', 'name' => $st['name'], 'cost' => (int)$text, 'icon' => (string)($st['icon'] ?? '')]);
             send($uid, "Ye reward kaise milega?", ['inline_keyboard' => [
                 [cbtn('📦 Auto Code (stock se)', 'a:rwk:stock')],
                 [cbtn('🧑‍💼 Manual (admin deliver karega)', 'a:rwk:manual')],
@@ -793,10 +810,32 @@ function admin_input(int $uid, array $u, array $m): bool {
 
         case 'rw_editname':
             if ($text === '') { send($uid, 'Naam text mein bhejo.'); return true; }
-            $pdo->prepare('UPDATE rewards SET name = ? WHERE id = ?')->execute([mb_substr($text, 0, 60), (int)$st['rid']]);
+            $ids = custom_emoji_ids($m);
+            if ($ids) {
+                $pdo->prepare('UPDATE rewards SET name = ?, custom_icon = ? WHERE id = ?')->execute([mb_substr($text, 0, 60), $ids[0], (int)$st['rid']]);
+            } else {
+                $pdo->prepare('UPDATE rewards SET name = ? WHERE id = ?')->execute([mb_substr($text, 0, 60), (int)$st['rid']]);
+            }
             set_state($uid, null);
             [$t, $kb] = p_reward((int)$st['rid']);
             send($uid, "✅ Naam badal gaya.\n\n" . $t, $kb);
+            return true;
+
+        case 'rw_editicon':
+            $ids = custom_emoji_ids($m);
+            if (!$ids && preg_match('/^\d{5,25}$/', $text)) $ids = [$text];
+            if ($text === '0' || mb_strtolower($text) === 'remove') {
+                $pdo->prepare('UPDATE rewards SET custom_icon = "" WHERE id = ?')->execute([(int)$st['rid']]);
+                set_state($uid, null);
+                [$t, $kb] = p_reward((int)$st['rid']);
+                send($uid, "✅ Custom icon hata diya.\n\n" . $t, $kb);
+                return true;
+            }
+            if (!$ids) { send($uid, '❌ Isme premium emoji nahi mila. Ek <b>premium/custom emoji</b> bhejo ya uski ID (ya 0 bhejo hatane ke liye).'); return true; }
+            $pdo->prepare('UPDATE rewards SET custom_icon = ? WHERE id = ?')->execute([$ids[0], (int)$st['rid']]);
+            set_state($uid, null);
+            [$t, $kb] = p_reward((int)$st['rid']);
+            send($uid, "✅ Custom icon set ho gaya!\n\n" . $t, $kb);
             return true;
 
         case 'rw_editcost':
