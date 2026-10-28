@@ -43,6 +43,7 @@ function h($s): string {
 }
 
 function log_line(string $msg): void {
+    error_log('[ReferBot] ' . $msg);
     $f = cfg('log_path', '/var/lib/referbot/referbot.log');
     @file_put_contents($f, '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n", FILE_APPEND | LOCK_EX);
 }
