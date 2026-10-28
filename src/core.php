@@ -163,7 +163,8 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
 
         $store = $tokenTaken ? hash('sha256', $token . ':' . $uid) : $token;   // exempt users: keep UNIQUE happy
         if (db_driver() === 'pgsql') {
-            $pdo->prepare('INSERT INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT (user_id) DO UPDATE SET device_token = EXCLUDED.device_token, fp_hash = EXCLUDED.fp_hash, ip = EXCLUDED.ip, ua = EXCLUDED.ua, created_at = EXCLUDED.created_at')
+            $pdo->prepare('DELETE FROM devices WHERE user_id = ?')->execute([$uid]);
+            $pdo->prepare('INSERT INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
                 ->execute([$uid, $store, $fp, $ip, substr($ua, 0, 200), time()]);
         } else {
             $pdo->prepare('INSERT OR REPLACE INTO devices(user_id, device_token, fp_hash, ip, ua, created_at) VALUES(?,?,?,?,?,?)')
