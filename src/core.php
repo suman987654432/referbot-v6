@@ -130,38 +130,36 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     $pdo = db();
     $exempt = (bool)$u['device_exempt'];
     $credited = [];
+
+    // 1) same install / same device already used by ANOTHER account
+    $st = $pdo->prepare('SELECT user_id FROM devices WHERE device_token = ? AND user_id <> ?');
+    $st->execute([$token, $uid]);
+    $tokenTaken = (bool)$st->fetch();
+    if ($tokenTaken && !$exempt) {
+        log_verify($uid, $ip, $fp, 'device_used');
+        return $fail('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
+    }
+    if (opt('fp_strict', true)) {
+        $st = $pdo->prepare('SELECT user_id FROM devices WHERE fp_hash = ? AND user_id <> ?');
+        $st->execute([$fp, $uid]);
+        if ($st->fetch() && !$exempt) {
+            log_verify($uid, $ip, $fp, 'device_used');
+            return $fail('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
+        }
+    }
+    // 2) soft IP limit (0 = off)
+    $maxIp = (int)opt('max_per_ip_24h', 5);
+    if ($maxIp > 0 && !$exempt) {
+        $st = $pdo->prepare('SELECT COUNT(*) FROM devices WHERE ip = ? AND created_at > ? AND user_id <> ?');
+        $st->execute([$ip, time() - 86400, $uid]);
+        if ((int)$st->fetchColumn() >= $maxIp) {
+            log_verify($uid, $ip, $fp, 'ip_limit');
+            return $fail('ip_limit', 'Is network se bahut saare accounts verify ho chuke hain. Mobile data/WiFi badal ke kal try karo.');
+        }
+    }
+
     try {
         db_begin($pdo);
-
-        $reject = function (string $code, string $msg) use ($pdo, $uid, $ip, $fp, $fail) {
-            try { if ($pdo->inTransaction()) { $pdo->rollBack(); } else { $pdo->exec('ROLLBACK'); } } catch (Throwable $e) {}
-            log_verify($uid, $ip, $fp, $code);
-            return $fail($code, $msg);
-        };
-
-        // 1) same install / same device already used by ANOTHER account
-        $st = $pdo->prepare('SELECT user_id FROM devices WHERE device_token = ? AND user_id <> ?');
-        $st->execute([$token, $uid]);
-        $tokenTaken = (bool)$st->fetch();
-        if ($tokenTaken && !$exempt) {
-            return $reject('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
-        }
-        if (opt('fp_strict', true)) {
-            $st = $pdo->prepare('SELECT user_id FROM devices WHERE fp_hash = ? AND user_id <> ?');
-            $st->execute([$fp, $uid]);
-            if ($st->fetch() && !$exempt) {
-                return $reject('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
-            }
-        }
-        // 2) soft IP limit (0 = off)
-        $maxIp = (int)opt('max_per_ip_24h', 5);
-        if ($maxIp > 0 && !$exempt) {
-            $st = $pdo->prepare('SELECT COUNT(*) FROM devices WHERE ip = ? AND created_at > ? AND user_id <> ?');
-            $st->execute([$ip, time() - 86400, $uid]);
-            if ((int)$st->fetchColumn() >= $maxIp) {
-                return $reject('ip_limit', 'Is network se bahut saare accounts verify ho chuke hain. Mobile data/WiFi badal ke kal try karo.');
-            }
-        }
 
         $store = $tokenTaken ? hash('sha256', $token . ':' . $uid) : $token;   // exempt users: keep UNIQUE happy
         if (db_driver() === 'pgsql') {
@@ -236,7 +234,7 @@ function redeem(int $uid, int $rid): array {
         $err = null;
         if (!$rw || !$u)                          $err = 'Ye reward available nahi hai.';
         elseif ((int)$u['points'] < (int)$rw['cost']) $err = 'Aapke points kam hain. Chahiye: ' . (int)$rw['cost'] . ', aapke paas: ' . (int)$u['points'];
-        if ($err) { $pdo->exec('ROLLBACK'); return ['ok' => false, 'msg' => $err]; }
+        if ($err) { if ($pdo->inTransaction()) $pdo->rollBack(); return ['ok' => false, 'msg' => $err]; }
 
         if (($rw['kind'] ?? 'stock') === 'manual') {          // service delivered by admin, no stock needed
             add_points($uid, -(int)$rw['cost'], 'redeem', 'reward:' . $rid . ':manual');
@@ -246,17 +244,17 @@ function redeem(int $uid, int $rid): array {
         $st = $pdo->prepare('SELECT id, code FROM reward_stock WHERE reward_id = ? AND used = 0 ORDER BY id LIMIT 1');
         $st->execute([$rid]);
         $s = $st->fetch();
-        if (!$s) { $pdo->exec('ROLLBACK'); return ['ok' => false, 'msg' => 'Is reward ka stock abhi khatam hai. Baad mein try karo.']; }
+        if (!$s) { if ($pdo->inTransaction()) $pdo->rollBack(); return ['ok' => false, 'msg' => 'Is reward ka stock abhi khatam hai. Baad mein try karo.']; }
 
         $up = $pdo->prepare('UPDATE reward_stock SET used = 1, claimed_by = ?, claimed_at = ? WHERE id = ? AND used = 0');
         $up->execute([$uid, time(), $s['id']]);
-        if ($up->rowCount() !== 1) { $pdo->exec('ROLLBACK'); return ['ok' => false, 'msg' => 'Dobara try karo.']; }
+        if ($up->rowCount() !== 1) { if ($pdo->inTransaction()) $pdo->rollBack(); return ['ok' => false, 'msg' => 'Dobara try karo.']; }
         add_points($uid, -(int)$rw['cost'], 'redeem', 'reward:' . $rid . ':stock:' . $s['id']);
         $pdo->exec('COMMIT');
         return ['ok' => true, 'code' => $s['code'], 'reward' => $rw['name'],
                 'left' => (int)$u['points'] - (int)$rw['cost']];
     } catch (Throwable $e) {
-        try { $pdo->exec('ROLLBACK'); } catch (Throwable $e2) {}
+        try { if ($pdo->inTransaction()) $pdo->rollBack(); } catch (Throwable $e2) {}
         log_line('redeem error: ' . $e->getMessage());
         return ['ok' => false, 'msg' => 'Server error, dobara try karo.'];
     }
