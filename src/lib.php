@@ -64,7 +64,15 @@ function db_driver(): string {
 
 function db_begin(PDO $pdo): void {
     if (db_driver() === 'pgsql') {
-        if (!$pdo->inTransaction()) $pdo->beginTransaction();
+        // Unconditionally reset any PostgreSQL-level aborted transaction state.
+        // ROLLBACK outside a transaction gives only a harmless WARNING (not an ERROR).
+        // This covers stale state that PDO's inTransaction() doesn't track.
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (Throwable $ignored) {}
+        } else {
+            try { $pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {}
+        }
+        $pdo->beginTransaction();
     } else {
         if (!$pdo->inTransaction()) $pdo->exec('BEGIN IMMEDIATE');
     }
@@ -87,6 +95,7 @@ function db(): PDO {
         $pdo = new PDO($dsn, $user, $pass);
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        $pdo->setAttribute(PDO::ATTR_EMULATE_PREPARES, true);   // reliable error propagation on pgsql
         init_schema_pgsql($pdo);
     } else {
         $pdo = new PDO('sqlite:' . cfg('db_path', '/var/lib/referbot/referbot.db'));
@@ -103,8 +112,9 @@ function db(): PDO {
 }
 
 function init_schema_pgsql(PDO $pdo): void {
-    $pdo->exec("
-    CREATE TABLE IF NOT EXISTS users(
+    // Each statement in its own exec() — PDO pgsql can silently ignore statements
+    // after the first in a multi-statement exec() block on some drivers/versions.
+    $pdo->exec("CREATE TABLE IF NOT EXISTS users(
       user_id       BIGINT PRIMARY KEY,
       username      TEXT NOT NULL DEFAULT '',
       first_name    TEXT NOT NULL DEFAULT '',
@@ -116,42 +126,47 @@ function init_schema_pgsql(PDO $pdo): void {
       device_exempt INT NOT NULL DEFAULT 0,
       chan_ok_until BIGINT NOT NULL DEFAULT 0,
       state         TEXT NOT NULL DEFAULT ''
-    );
-    CREATE TABLE IF NOT EXISTS referrals(
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS referrals(
       referred_id BIGINT PRIMARY KEY,
       referrer_id BIGINT NOT NULL,
       created_at  BIGINT NOT NULL,
       status      TEXT NOT NULL DEFAULT 'pending',
       credited_at BIGINT
-    );
-    CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_id, status);
-    CREATE TABLE IF NOT EXISTS devices(
+    )");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_id, status)");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS devices(
       user_id      BIGINT PRIMARY KEY,
       device_token TEXT NOT NULL UNIQUE,
       fp_hash      TEXT NOT NULL,
       ip           TEXT NOT NULL,
       ua           TEXT NOT NULL DEFAULT '',
       created_at   BIGINT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_dev_fp ON devices(fp_hash);
-    CREATE INDEX IF NOT EXISTS idx_dev_ip ON devices(ip, created_at);
-    CREATE TABLE IF NOT EXISTS ledger(
+    )");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_dev_fp ON devices(fp_hash)");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_dev_ip ON devices(ip, created_at)");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS ledger(
       id         BIGSERIAL PRIMARY KEY,
       user_id    BIGINT NOT NULL,
       delta      BIGINT NOT NULL,
       reason     TEXT NOT NULL,
       ref        TEXT NOT NULL DEFAULT '',
       created_at BIGINT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
-    CREATE TABLE IF NOT EXISTS rewards(
+    )");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at)");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS rewards(
       id     BIGSERIAL PRIMARY KEY,
       name   TEXT NOT NULL,
       cost   BIGINT NOT NULL CHECK(cost > 0),
       active INT NOT NULL DEFAULT 1,
       kind   TEXT NOT NULL DEFAULT 'stock'
-    );
-    CREATE TABLE IF NOT EXISTS reward_stock(
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS reward_stock(
       id         BIGSERIAL PRIMARY KEY,
       reward_id  BIGINT NOT NULL,
       code       TEXT NOT NULL,
@@ -159,31 +174,34 @@ function init_schema_pgsql(PDO $pdo): void {
       claimed_by BIGINT,
       claimed_at BIGINT,
       UNIQUE(reward_id, code)
-    );
-    CREATE INDEX IF NOT EXISTS idx_stock_avail ON reward_stock(reward_id, used, id);
-    CREATE TABLE IF NOT EXISTS verify_log(
+    )");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_stock_avail ON reward_stock(reward_id, used, id)");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS verify_log(
       id         BIGSERIAL PRIMARY KEY,
       user_id    BIGINT,
       ip         TEXT,
       fp_hash    TEXT,
       result     TEXT,
       created_at BIGINT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS settings(
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS settings(
       k TEXT PRIMARY KEY,
       v TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS channels(
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS channels(
       id    BIGSERIAL PRIMARY KEY,
       chat  TEXT NOT NULL UNIQUE,
       title TEXT NOT NULL DEFAULT '',
       link  TEXT NOT NULL DEFAULT ''
-    );
-    CREATE TABLE IF NOT EXISTS seen_updates(
+    )");
+
+    $pdo->exec("CREATE TABLE IF NOT EXISTS seen_updates(
       update_id  BIGINT PRIMARY KEY,
       created_at BIGINT NOT NULL
-    );
-    ");
+    )");
 
     // seed channels from config if empty
     $count = (int)$pdo->query('SELECT COUNT(*) FROM channels')->fetchColumn();
@@ -197,6 +215,7 @@ function init_schema_pgsql(PDO $pdo): void {
         }
     }
 }
+
 
 function init_schema(PDO $pdo): void {
     // every statement is IF NOT EXISTS, so this upgrades v1 databases in place (data is kept)
