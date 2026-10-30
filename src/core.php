@@ -30,11 +30,13 @@ function touch_user(int $uid, string $first, string $username): bool {
     return $new;
 }
 
-/** Referral links work only for brand-new users, never for self, banned or unknown referrers. */
+/** Referral links work only for unverified users, never for self, banned or unknown referrers. */
 function attach_referrer(int $uid, int $ref): bool {
     if ($ref <= 0 || $ref === $uid) return false;
     $r = get_user($ref);
     if (!$r || $r['banned']) return false;
+    $u = get_user($uid);
+    if ($u && !empty($u['verified_at'])) return false;
     if (db_driver() === 'pgsql') {
         $st = db()->prepare('INSERT INTO referrals(referred_id, referrer_id, created_at) VALUES(?,?,?) ON CONFLICT (referred_id) DO NOTHING');
     } else {
@@ -48,14 +50,19 @@ function attach_referrer(int $uid, int $ref): bool {
 
 /** Applies a points change (never below zero) and writes the ledger. Returns the actual delta. */
 function add_points(int $uid, int $delta, string $reason, string $ref = ''): int {
-    $u = get_user($uid);
-    if (!$u) return 0;
-    $old = (int)$u['points'];
-    $new = max(0, $old + $delta);
-    $actual = $new - $old;
     $pdo = db();
-    $pdo->prepare('UPDATE users SET points = ?, total_earned = total_earned + ? WHERE user_id = ?')
-        ->execute([$new, max(0, $actual), $uid]);
+    if ($delta >= 0) {
+        $st = $pdo->prepare('UPDATE users SET points = points + ?, total_earned = total_earned + ? WHERE user_id = ?');
+        $st->execute([$delta, $delta, $uid]);
+        $actual = $delta;
+    } else {
+        $u = get_user($uid);
+        if (!$u) return 0;
+        $old = (int)$u['points'];
+        $actual = max(-$old, $delta);
+        $st = $pdo->prepare('UPDATE users SET points = points + ? WHERE user_id = ?');
+        $st->execute([$actual, $uid]);
+    }
     $pdo->prepare('INSERT INTO ledger(user_id, delta, reason, ref, created_at) VALUES(?,?,?,?,?)')
         ->execute([$uid, $actual, $reason, $ref, time()]);
     return $actual;
@@ -128,7 +135,7 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
     }
 
     $pdo = db();
-    $exempt = (bool)$u['device_exempt'];
+    $exempt = (bool)$u['device_exempt'] || is_admin($uid);
     $credited = [];
 
     // 1) same install / same device already used by ANOTHER account
@@ -139,7 +146,7 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
         log_verify($uid, $ip, $fp, 'device_used');
         return $fail('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
     }
-    if (opt('fp_strict', true)) {
+    if (opt('fp_strict', false)) {
         $st = $pdo->prepare('SELECT user_id FROM devices WHERE fp_hash = ? AND user_id <> ?');
         $st->execute([$fp, $uid]);
         if ($st->fetch() && !$exempt) {
@@ -147,9 +154,10 @@ function verify_device(int $uid, string $token, string $fp, string $ip, string $
             return $fail('device_used', 'Is device par pehle hi ek aur account verify hai. Ek device par sirf ek account allowed hai.');
         }
     }
-    // 2) soft IP limit (0 = off)
+    // 2) soft IP limit (0 = off) - ignore local/private test IPs
     $maxIp = (int)opt('max_per_ip_24h', 5);
-    if ($maxIp > 0 && !$exempt) {
+    $isPrivateIp = !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE);
+    if ($maxIp > 0 && !$exempt && !$isPrivateIp) {
         $st = $pdo->prepare('SELECT COUNT(*) FROM devices WHERE ip = ? AND created_at > ? AND user_id <> ?');
         $st->execute([$ip, time() - 86400, $uid]);
         if ((int)$st->fetchColumn() >= $maxIp) {

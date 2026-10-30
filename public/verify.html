@@ -13,9 +13,9 @@
   .icon{font-size:56px;margin-bottom:8px}
   h1{font-size:20px;margin:0 0 8px}
   p{margin:0 0 14px;color:var(--hint);font-size:14px}
-  button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--btn);color:var(--btnfg);font-size:16px;font-weight:600}
-  button:disabled{opacity:.6}
-  #msg{margin-top:16px;font-size:15px;min-height:24px}
+  button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--btn);color:var(--btnfg);font-size:16px;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  #msg{margin-top:16px;font-size:15px;min-height:24px;line-height:1.4}
   .ok{color:#1a9e47}.err{color:#d93025}
   small{display:block;margin-top:18px;color:var(--hint);font-size:12px}
 </style>
@@ -27,29 +27,120 @@
   <p>Ek device par sirf ek account allowed hai. Verify dabao.</p>
   <button id="go">Verify Karo</button>
   <div id="msg"></div>
-  <small>Verify karne par aapke device ke browser/hardware ki general info (screen, GPU model, timezone) ek anonymous hash ke roop mein save hoti hai — sirf duplicate accounts rokne ke liye. Koi personal file ya contact access nahi hota.</small>
+  <small>Verify karne par aapke device ke browser/hardware ki general info ek anonymous hash ke roop mein save hoti hai — duplicate accounts rokne ke liye. Koi personal file ya contact access nahi hota.</small>
 </div>
 <script>
 const tg = window.Telegram && Telegram.WebApp;
-if (tg) { tg.ready(); tg.expand(); }
+if (tg) {
+  try { tg.ready(); tg.expand(); } catch (e) {}
+}
 const $ = id => document.getElementById(id);
+
+function getInitData() {
+  if (window.Telegram && Telegram.WebApp && Telegram.WebApp.initData) {
+    return Telegram.WebApp.initData;
+  }
+  const h = window.location.hash || '';
+  if (h.indexOf('tgWebAppData=') !== -1) {
+    const m = h.match(/tgWebAppData=([^&]+)/);
+    if (m && m[1]) {
+      try { return decodeURIComponent(m[1]); } catch (e) { return m[1]; }
+    }
+  }
+  return '';
+}
 
 function getToken() {
   let t = null;
   try { t = localStorage.getItem('rb_dt'); } catch (e) {}
-  if (!t) { const m = document.cookie.match(/(?:^|; )rb_dt=([a-f0-9-]{16,64})/); if (m) t = m[1]; }
   if (!t) {
-    t = (crypto.randomUUID ? crypto.randomUUID() :
-         Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join(''));
+    const m = document.cookie.match(/(?:^|; )rb_dt=([a-f0-9-]{16,64})/);
+    if (m) t = m[1];
+  }
+  if (!t) {
+    try {
+      if (window.crypto && crypto.randomUUID) {
+        t = crypto.randomUUID();
+      } else if (window.crypto && crypto.getRandomValues) {
+        t = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+      }
+    } catch (e) {}
+    if (!t) {
+      t = Array.from({length: 32}, () => Math.floor(Math.random() * 16).toString(16)).join('');
+    }
   }
   try { localStorage.setItem('rb_dt', t); } catch (e) {}
   document.cookie = 'rb_dt=' + t + ';max-age=31536000;path=/;SameSite=None;Secure';
   return t;
 }
 
-async function sha256(s) {
-  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join('');
+async function sha256(ascii) {
+  if (window.crypto && crypto.subtle && crypto.subtle.digest) {
+    try {
+      const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ascii));
+      return Array.from(new Uint8Array(b), x => x.toString(16).padStart(2, '0')).join('');
+    } catch (e) {}
+  }
+  // Pure JS fallback
+  function rightRotate(value, amount) { return (value >>> amount) | (value << (32 - amount)); }
+  var mathPow = Math.pow;
+  var maxWord = mathPow(2, 32);
+  var lengthProperty = 'length';
+  var i, j;
+  var result = '';
+  var words = [];
+  var asciiBitLength = ascii[lengthProperty] * 8;
+  var hash = [], k = [];
+  var primeCounter = 0;
+  var isComposite = {};
+  for (var candidate = 2; primeCounter < 64; candidate++) {
+    if (!isComposite[candidate]) {
+      for (i = 0; i < 313; i += candidate) isComposite[i] = candidate;
+      hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+      k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+    }
+  }
+  hash = hash.slice(0, 8);
+  ascii += '\x80';
+  while (ascii[lengthProperty] % 64 - 56) ascii += '\x00';
+  for (i = 0; i < ascii[lengthProperty]; i++) {
+    j = ascii.charCodeAt(i);
+    if (j >> 8) return '';
+    words[i >> 2] |= j << ((3 - i) % 4) * 8;
+  }
+  words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+  words[words[lengthProperty]] = (asciiBitLength);
+  for (j = 0; j < words[lengthProperty];) {
+    var w = words.slice(j, j += 16);
+    var oldHash = hash;
+    hash = hash.slice(0, 8);
+    for (i = 0; i < 64; i++) {
+      var w15 = w[i - 15], w2 = w[i - 2];
+      var a = hash[0], e = hash[4];
+      var temp1 = hash[7]
+        + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25))
+        + ((e & hash[5]) ^ ((~e) & hash[6]))
+        + k[i]
+        + (w[i] = (i < 16) ? w[i] : (
+            w[i - 16]
+            + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3))
+            + w[i - 7]
+            + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))
+          ) | 0);
+      var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22))
+        + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+      hash = [(temp1 + temp2) | 0].concat(hash);
+      hash[4] = (hash[4] + temp1) | 0;
+    }
+    for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+  }
+  for (i = 0; i < 8; i++) {
+    for (var i2 = 3; i2 >= 0; i2--) {
+      var b = (hash[i] >> (i2 * 8)) & 255;
+      result += (b < 16 ? '0' : '') + b.toString(16);
+    }
+  }
+  return result;
 }
 
 function canvasSig() {
@@ -76,13 +167,13 @@ function glSig() {
 }
 
 async function fingerprint() {
-  const s = screen;
-  const dims = [Math.min(s.width, s.height), Math.max(s.width, s.height)];   // stable across rotation
+  const s = screen || { width: 0, height: 0, colorDepth: 24 };
+  const dims = [Math.min(s.width || 0, s.height || 0), Math.max(s.width || 0, s.height || 0)];
   const parts = [
-    await sha256(canvasSig()), glSig(), dims.join('x'), s.colorDepth, window.devicePixelRatio,
+    await sha256(canvasSig()), glSig(), dims.join('x'), s.colorDepth || 24, window.devicePixelRatio || 1,
     navigator.hardwareConcurrency || 0, navigator.deviceMemory || 0, navigator.platform || '',
-    navigator.maxTouchPoints || 0, Intl.DateTimeFormat().resolvedOptions().timeZone || '',
-    (navigator.languages || [navigator.language]).join(',')
+    navigator.maxTouchPoints || 0, (Intl && Intl.DateTimeFormat) ? Intl.DateTimeFormat().resolvedOptions().timeZone || '' : '',
+    (navigator.languages || [navigator.language || '']).join(',')
   ];
   return sha256(parts.join('||'));
 }
@@ -91,23 +182,42 @@ $('go').onclick = async () => {
   const btn = $('go'), msg = $('msg');
   btn.disabled = true; msg.className = ''; msg.textContent = 'Check ho raha hai...';
   try {
+    const initData = getInitData();
+    if (!initData) {
+      msg.innerHTML = '⚠️ <b>Telegram se kholein:</b> Bot ke andar "Verify Device" button dabayein.';
+      msg.className = 'err';
+      btn.disabled = false;
+      return;
+    }
+    const token = getToken();
+    const fp = await fingerprint();
     const body = {
-      initData: tg ? tg.initData : '',
-      deviceToken: getToken(),
-      fp: await fingerprint(),
+      initData: initData,
+      deviceToken: token,
+      fp: fp,
       signals: { webdriver: !!navigator.webdriver }
     };
-    const r = await fetch('api_verify.php', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch('api_verify.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
     const j = await r.json();
     msg.textContent = j.msg || (j.ok ? 'Done' : 'Error');
     msg.className = j.ok ? 'ok' : 'err';
     if (j.ok) {
       $('icon').textContent = '✅'; btn.style.display = 'none';
-      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-      setTimeout(() => tg && tg.close(), 1800);
-    } else { btn.disabled = false; }
+      if (tg && tg.HapticFeedback) {
+        try { tg.HapticFeedback.notificationOccurred('success'); } catch (e) {}
+      }
+      setTimeout(() => { if (tg && tg.close) tg.close(); }, 1800);
+    } else {
+      btn.disabled = false;
+    }
   } catch (e) {
-    msg.textContent = 'Network error. Dobara try karo.'; msg.className = 'err'; btn.disabled = false;
+    msg.textContent = (e && e.message && !e.message.includes('fetch')) ? ('Error: ' + e.message) : 'Network error. Dobara try karo.';
+    msg.className = 'err';
+    btn.disabled = false;
   }
 };
 </script>

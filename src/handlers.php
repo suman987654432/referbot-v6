@@ -185,8 +185,12 @@ function handle_update(array $upd): void {
     $isNew = touch_user($uid, $name, (string)($m['from']['username'] ?? ''));
 
     if (preg_match('/^\/start(?:\s+(\S+))?$/', $text, $mm)) {
-        if ($isNew && isset($mm[1]) && preg_match('/^r(\d+)$/', $mm[1], $rm)) {
-            attach_referrer($uid, (int)$rm[1]);
+        if (isset($mm[1]) && preg_match('/^r(\d+)$/', $mm[1], $rm)) {
+            $attached = attach_referrer($uid, (int)$rm[1]);
+            if ($attached) {
+                $refUid = (int)$rm[1];
+                send($refUid, "👤 <b>Naya referral juda!</b>\n" . h($name) . " aapke link se juda hai. Jaise hi wo apna device verify karega, aapko point mil jayega.");
+            }
         }
         $u = get_user($uid);
         if ($u['banned']) { send($uid, 'Aapka account block hai.'); return; }
@@ -502,7 +506,7 @@ function p_slot(string $slot): array {
 }
 
 function p_device(): array {
-    $strict = (bool)opt('fp_strict', true);
+    $strict = (bool)opt('fp_strict', false);
     $ip = (int)opt('max_per_ip_24h', 5);
     $rej = count_q("SELECT COUNT(*) FROM verify_log WHERE result IN ('device_used','ip_limit') AND created_at > " . (time() - 86400));
     $t = "🛡 <b>Device Rules</b>\n\nFingerprint strict: <b>" . ($strict ? '🟢 ON' : '🔴 OFF') . "</b>\n"

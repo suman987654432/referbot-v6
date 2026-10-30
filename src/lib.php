@@ -63,19 +63,13 @@ function db_driver(): string {
 }
 
 function db_begin(PDO $pdo): void {
-    if (db_driver() === 'pgsql') {
-        // Unconditionally reset any PostgreSQL-level aborted transaction state.
-        // ROLLBACK outside a transaction gives only a harmless WARNING (not an ERROR).
-        // This covers stale state that PDO's inTransaction() doesn't track.
-        if ($pdo->inTransaction()) {
-            try { $pdo->rollBack(); } catch (Throwable $ignored) {}
-        } else {
-            try { $pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {}
-        }
-        $pdo->beginTransaction();
-    } else {
-        if (!$pdo->inTransaction()) $pdo->exec('BEGIN IMMEDIATE');
+    if ($pdo->inTransaction()) {
+        try { $pdo->rollBack(); } catch (Throwable $ignored) {}
     }
+    if (db_driver() === 'pgsql') {
+        try { $pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {}
+    }
+    $pdo->beginTransaction();
 }
 
 function db(): PDO {
@@ -647,8 +641,22 @@ function validate_init_data(string $init, int $max_age = 3600): ?array {
 }
 
 function client_ip(): string {
-    $hdr = (string)cfg('ip_header', 'REMOTE_ADDR');
-    $ip = trim(explode(',', (string)($_SERVER[$hdr] ?? ''))[0]);
-    if (!filter_var($ip, FILTER_VALIDATE_IP)) $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
-    return $ip;
+    $hdr = (string)cfg('ip_header', '');
+    if ($hdr !== '' && $hdr !== 'REMOTE_ADDR' && !empty($_SERVER[$hdr])) {
+        $ip = trim(explode(',', (string)$_SERVER[$hdr])[0]);
+        if (filter_var($ip, FILTER_VALIDATE_IP)) return $ip;
+    }
+    foreach (['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'] as $h) {
+        if (!empty($_SERVER[$h])) {
+            $parts = explode(',', (string)$_SERVER[$h]);
+            foreach ($parts as $p) {
+                $p = trim($p);
+                if (filter_var($p, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                    return $p;
+                }
+            }
+        }
+    }
+    $ip = trim(explode(',', (string)($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'))[0]);
+    return filter_var($ip, FILTER_VALIDATE_IP) ? $ip : '0.0.0.0';
 }

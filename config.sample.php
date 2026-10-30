@@ -16,7 +16,7 @@ return [
     'log_path'           => '/var/lib/referbot/referbot.log',
 
     'points_per_referral'=> 1,
-    'fp_strict'          => true,    // true = same hardware fingerprint on 2 accounts => reject
+    'fp_strict'          => false,   // false = recommended (true same phone models par false reject karta hai)
     'max_per_ip_24h'     => 5,       // soft limit (mobile data IP shared hota hai). 0 = off
     'ip_header'          => 'REMOTE_ADDR',   // Cloudflare ke peeche ho to 'HTTP_CF_CONNECTING_IP'
 
