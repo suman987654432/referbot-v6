@@ -184,7 +184,22 @@ function handle_update(array $upd): void {
     $text = trim((string)($m['text'] ?? ''));
     $isNew = touch_user($uid, $name, (string)($m['from']['username'] ?? ''));
 
-    if (preg_match('/^\/start(?:\s+(\S+))?$/', $text, $mm)) {
+    $u = get_user($uid);
+    if ($u && $u['banned']) { send($uid, 'Aapka account block hai.'); return; }
+
+    $k = norm_label($text);
+    if (is_admin($uid)) {
+        if ($u && admin_input($uid, $u, $m)) return;
+        if ($k === 'admin panel' || $k === 'admin') { open_panel($uid); return; }
+        if (handle_admin_cmd($uid, $text)) return;
+    }
+
+    if (is_maintenance() && !is_admin($uid)) {
+        send($uid, maintenance_msg());
+        return;
+    }
+
+    if (preg_match('/^\/start(?:\s+(\S+))?$/i', $text, $mm)) {
         if (isset($mm[1]) && preg_match('/^r(\d+)$/', $mm[1], $rm)) {
             $attached = attach_referrer($uid, (int)$rm[1]);
             if ($attached) {
@@ -193,22 +208,13 @@ function handle_update(array $upd): void {
             }
         }
         $u = get_user($uid);
-        if ($u['banned']) { send($uid, 'Aapka account block hai.'); return; }
         if (is_admin($uid)) set_state($uid, null);
         send_welcome($uid, $name);
         gate($uid, $u);
         return;
     }
 
-    $u = get_user($uid);
-    if ($u['banned']) return;
-
-    $k = norm_label($text);
-    if (is_admin($uid)) {
-        if (admin_input($uid, $u, $m)) return;
-        if ($k === 'admin panel' || $k === 'admin') { open_panel($uid); return; }
-        if (handle_admin_cmd($uid, $text)) return;
-    }
+    if (!$u) $u = get_user($uid);
 
     if (!gate($uid, $u)) return;
 
@@ -279,6 +285,11 @@ function handle_callback(array $cb): void {
         return;
     }
 
+    if (is_maintenance() && !is_admin($uid)) {
+        answer_cb($id, '🛠 Bot abhi maintenance me hai. Kripya thodi der baad try karein.', true);
+        return;
+    }
+
     if ($data === 'chk') {
         db()->prepare('UPDATE users SET chan_ok_until = 0 WHERE user_id = ?')->execute([$uid]);
         if (!channels_ok($uid)) { answer_cb($id, '❌ Abhi saare channels join nahi kiye.', true); return; }
@@ -327,7 +338,10 @@ function count_q(string $sql): int {
 }
 
 function p_home(): array {
+    $maint = is_maintenance();
+    $statusText = $maint ? "🔴 <b>Maintenance Mode (Bot OFF)</b>" : "🟢 <b>Online (Bot ON)</b>";
     $t = E('admin') . " <b>Admin Panel</b>\n\n"
+       . "⚡ Status: " . $statusText . "\n"
        . "👥 Users: <b>" . count_q('SELECT COUNT(*) FROM users') . "</b> (verified " . count_q('SELECT COUNT(*) FROM users WHERE verified_at IS NOT NULL') . ")\n"
        . "⏳ Pending refers: <b>" . count_q("SELECT COUNT(*) FROM referrals WHERE status='pending'") . "</b>\n"
        . E('points') . " Per refer: <b>" . pts_per_ref() . " pts</b>\n"
@@ -336,7 +350,22 @@ function p_home(): array {
         [cbtn('📢 Channels', 'a:ch'),        cbtn('🎁 Rewards / Services', 'a:rw')],
         [cbtn('💎 Points per Refer', 'a:pts'), cbtn('👥 Users', 'a:us')],
         [cbtn('🎨 Premium Emoji', 'a:em'),   cbtn('🛡 Device Rules', 'a:dv')],
-        [cbtn('📣 Broadcast', 'a:bc'),       cbtn('📊 Stats', 'a:st')],
+        [cbtn($maint ? '🔴 Maintenance Mode (ON)' : '🛠 Maintenance Mode', 'a:mt'), cbtn('📣 Broadcast', 'a:bc')],
+        [cbtn('📊 Stats', 'a:st')],
+    ]]];
+}
+
+function p_maintenance(): array {
+    $maint = is_maintenance();
+    $msg = maintenance_msg();
+    $t = "🛠 <b>Bot On/Off (Maintenance Mode)</b>\n\n"
+       . "Status: <b>" . ($maint ? "🔴 OFF (Maintenance Chalu Hai)" : "🟢 ON (Bot Normal Chalu Hai)") . "</b>\n\n"
+       . "<i>Jab maintenance ON hota hai, normal users ko kisi bhi message ya button par maintenance message dikhta hai aur device verify band rehti hai. Admin ke liye bot hamesha chalu rehta hai.</i>\n\n"
+       . "📝 <b>Current Maintenance Message:</b>\n" . $msg;
+    return [$t, ['inline_keyboard' => [
+        [cbtn($maint ? '🟢 Bot ON Karo (Maintenance Hatao)' : '🔴 Bot OFF Karo (Maintenance Lagao)', 'a:mttoggle')],
+        [cbtn('✏️ Message Badlo', 'a:mtmsg'), cbtn('🔄 Default Message', 'a:mtrst')],
+        back_row(),
     ]]];
 }
 
@@ -717,6 +746,27 @@ function admin_cb(array $cb, array $u): void {
             send($uid, "🛡 Ek IP se 24 ghante mein max kitne account verify ho sakte hain? Number bhejo (0 = limit band).\n/cancel = ruko");
             break;
 
+        /* ---- maintenance mode ---- */
+        case 'mt':
+            set_state($uid, null);
+            render($chat, $mid, p_maintenance());
+            break;
+        case 'mttoggle':
+            $cur = is_maintenance();
+            set_setting('maintenance_mode', $cur ? '0' : '1');
+            $toast = $cur ? '🟢 Bot ON ho gaya!' : '🔴 Maintenance ON ho gaya!';
+            render($chat, $mid, p_maintenance());
+            break;
+        case 'mtmsg':
+            set_state($uid, ['s' => 'set_maint_msg']);
+            send($uid, "✏️ Naya <b>Maintenance Message</b> bhejo jo users ko dikhega jab bot OFF hoga.\n(HTML tags jaise <b>bold</b>, <i>italic</i> allowed hain).\n\n/cancel = ruko");
+            break;
+        case 'mtrst':
+            del_setting('maintenance_text');
+            $toast = 'Default message set ho gaya.';
+            render($chat, $mid, p_maintenance());
+            break;
+
         /* ---- stats / broadcast ---- */
         case 'st':
             panel_send($chat, $mid, stats_text(), ['inline_keyboard' => [back_row()]]);
@@ -866,6 +916,14 @@ function admin_input(int $uid, array $u, array $m): bool {
             send($uid, "✅ Ho gaya.\n\n" . $t, $kb);
             return true;
 
+        case 'set_maint_msg':
+            if ($text === '') { send($uid, 'Message text mein bhejo.'); return true; }
+            set_setting('maintenance_text', $text);
+            set_state($uid, null);
+            [$t, $kb] = p_maintenance();
+            send($uid, "✅ Maintenance message badal gaya!\n\n" . $t, $kb);
+            return true;
+
         case 'finduser':
             $q = ltrim($text, '@');
             if (ctype_digit($q)) { $s = $pdo->prepare('SELECT user_id FROM users WHERE user_id = ?'); $s->execute([(int)$q]); }
@@ -963,6 +1021,20 @@ function handle_admin_cmd(int $uid, string $text): bool {
             return true;
         case '/adminstats':
             send($uid, stats_text());
+            return true;
+        case '/maintenance': case '/maint': case '/off': case '/on':
+            $arg = strtolower(trim((string)($p[1] ?? '')));
+            if ($cmd === '/off' || $arg === 'on' || $arg === '1' || $arg === 'true') {
+                set_setting('maintenance_mode', '1');
+                send($uid, "🔴 <b>Maintenance Mode ON kar diya gaya hai!</b>\nAb normal users ke liye bot OFF hai.");
+            } elseif ($cmd === '/on' || $arg === 'off' || $arg === '0' || $arg === 'false') {
+                set_setting('maintenance_mode', '0');
+                send($uid, "🟢 <b>Bot ON kar diya gaya hai!</b>\nMaintenance mode hata diya gaya hai, sabhi users bot use kar sakte hain.");
+            } else {
+                $cur = is_maintenance();
+                set_setting('maintenance_mode', $cur ? '0' : '1');
+                send($uid, $cur ? "🟢 <b>Bot ON kar diya gaya hai!</b>" : "🔴 <b>Maintenance Mode ON kar diya gaya hai!</b>");
+            }
             return true;
         case '/emojitest':
             emoji_test($uid);

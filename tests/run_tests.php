@@ -400,6 +400,25 @@ reset_out();
 handle_update(cbq(100, 'a:bcgo'));
 t('non-admin cannot broadcast', count(array_filter(calls(), fn($c) => $c[0] === 'copyMessage')) === 0);
 
+echo "maintenance mode\n";
+t('maintenance is off by default', is_maintenance() === false);
+handle_update(cbq(1, 'a:mttoggle'));
+t('maintenance toggle turns on', is_maintenance() === true);
+reset_out();
+handle_update(msg(100, '/start'));
+$maintCalls = array_filter(calls(), fn($c) => $c[0] === 'sendMessage' && str_contains($c[1]['text'] ?? '', 'Maintenance'));
+t('user receives maintenance message', count($maintCalls) > 0);
+reset_out();
+handle_update(cbq(100, 'chk'));
+t('user callback blocked in maintenance', count(calls()) === 1 && calls()[0][0] === 'answerCallbackQuery' && calls()[0][1]['show_alert'] === true);
+handle_update(cbq(1, 'a:mtmsg'));
+handle_update(msg(1, 'Custom Maintenance Text'));
+t('custom maintenance message updated', setting('maintenance_text') === 'Custom Maintenance Text');
+handle_update(cbq(1, 'a:mtrst'));
+t('custom maintenance message reset', setting('maintenance_text', null) === null);
+handle_update(msg(1, '/on'));
+t('admin slash command turns bot on', is_maintenance() === false);
+
 echo "upgrade from v1 database\n";
 $old = "$dir/old.db";
 $pdo = new PDO('sqlite:' . $old);

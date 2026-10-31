@@ -8,6 +8,16 @@ function is_admin(int $uid): bool {
     return in_array($uid, array_map('intval', (array)cfg('admin_ids', [])), true);
 }
 
+function is_maintenance(): bool {
+    return setting('maintenance_mode', '0') === '1';
+}
+
+function maintenance_msg(): string {
+    $custom = trim((string)setting('maintenance_text', ''));
+    if ($custom !== '') return $custom;
+    return "🛠 <b>Bot Maintenance Mode me hai!</b>\n\nHum abhi zaroori maintenance/update kar rahe hain. Kripya thodi der baad dobara check karein.";
+}
+
 function get_user(int $uid): ?array {
     $st = db()->prepare('SELECT * FROM users WHERE user_id = ?');
     $st->execute([$uid]);
